@@ -28,7 +28,12 @@ def apply():
         from libtmux import server as _server
         from libtmux import session as _session
         from libtmux import window as _window
-        from libtmux.formats import FORMAT_SEPARATOR
+        import libtmux.formats as _formats
+
+        # Force separator to control character and clear all caches
+        _formats.FORMAT_SEPARATOR = "\x1e"
+        FORMAT_SEPARATOR = _formats.FORMAT_SEPARATOR
+        _neo.get_output_format.cache_clear()
 
         # Patch 2: Make parse_output lenient for value count mismatches
         _original_parse_output = _neo.parse_output
