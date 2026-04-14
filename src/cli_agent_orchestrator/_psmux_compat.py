@@ -1,51 +1,60 @@
 """Compatibility shim for running CAO with psmux on Windows.
 
-psmux is a Windows-native tmux replacement with these known differences:
+psmux is a Windows-native tmux replacement with these known differences
+from real tmux that break libtmux:
 
-1. Only handles U+001E as separator (not U+241E used by libtmux default).
-2. Does not support ``-F<value>`` (no space) — requires ``-F <value>``.
-3. ``new-session -PF`` may return fewer format values than expected.
+1. Only handles U+001E as format separator (not U+241E).
+2. Does not support concatenated flags (``-Fvalue``); requires ``-F value``.
+3. Does not support ``$N`` session IDs in ``-t`` arguments.
+4. ``new-session -PF`` may return fewer format values than expected.
 
-We patch libtmux at import time to work around all three.
+All patches are guarded by ``sys.platform == "win32"`` and have no effect
+on Linux/macOS.
 """
 
 import os
+import shutil
+import subprocess
 import sys
 
 
 def apply():
-    """Apply psmux compatibility patches."""
+    """Apply psmux compatibility patches. No-op on non-Windows."""
     if sys.platform != "win32":
-        return  # Only needed on Windows with psmux
+        return
 
-    # Patch 1: Use control character as format separator
+    # Patch 1: Use U+001E control character as format separator.
     if "LIBTMUX_TMUX_FORMAT_SEPARATOR" not in os.environ:
         os.environ["LIBTMUX_TMUX_FORMAT_SEPARATOR"] = "\x1e"
 
     try:
+        import libtmux.formats as _formats
+        from libtmux import exc as _exc
         from libtmux import neo as _neo
         from libtmux import pane as _pane
         from libtmux import server as _server
         from libtmux import session as _session
         from libtmux import window as _window
-        import libtmux.formats as _formats
+        from libtmux.common import tmux_cmd as _tmux_cmd
 
-        # Force separator to control character and clear all caches
+        # Force separator in case libtmux was imported before our env var.
         _formats.FORMAT_SEPARATOR = "\x1e"
-        FORMAT_SEPARATOR = _formats.FORMAT_SEPARATOR
         _neo.get_output_format.cache_clear()
+        _SEP = _formats.FORMAT_SEPARATOR
 
-        # Patch 2: Make parse_output lenient for value count mismatches
+        # ------------------------------------------------------------------
+        # Patch 2: Lenient parse_output for value count mismatches.
+        # ------------------------------------------------------------------
         _original_parse_output = _neo.parse_output
 
-        def _lenient_parse_output(output: str, *args, **kwargs):
-            if output.endswith(FORMAT_SEPARATOR):
-                output = output[: -len(FORMAT_SEPARATOR)]
+        def _lenient_parse_output(output, *args, **kwargs):
+            if output.endswith(_SEP):
+                output = output[: -len(_SEP)]
             try:
                 return _original_parse_output(output, *args, **kwargs)
             except ValueError:
                 formats, _ = _neo.get_output_format()
-                values = output.split(FORMAT_SEPARATOR)
+                values = output.split(_SEP)
                 n = len(formats)
                 if len(values) < n:
                     values.extend([""] * (n - len(values)))
@@ -56,103 +65,89 @@ def apply():
             if hasattr(mod, "parse_output"):
                 setattr(mod, "parse_output", _lenient_parse_output)
 
-        # Patch 3: Fix fetch_objs to use "-F" "<value>" (with space)
-        # instead of "-F<value>" (without space) which psmux doesn't support.
-        _original_fetch_objs = _neo.fetch_objs
+        # ------------------------------------------------------------------
+        # Patch 3: Fix fetch_objs — split concatenated flags and translate
+        # $N session IDs. Delegates to tmux_cmd directly but mirrors the
+        # original fetch_objs logic for forward-compatibility.
+        # ------------------------------------------------------------------
 
         def _patched_fetch_objs(server, list_cmd, list_extra_args=None):
-            from libtmux import exc
-            from libtmux.common import tmux_cmd
-
             _fields, format_string = _neo.get_output_format()
 
-            cmd_args: list = []
+            cmd_args = []
             if server.socket_name:
                 cmd_args.extend(["-L", server.socket_name])
             if server.socket_path:
                 cmd_args.extend(["-S", str(server.socket_path)])
 
             tmux_cmds = [*cmd_args, list_cmd]
+
             if list_extra_args:
-                # psmux doesn't support $N session IDs in -t.
-                # Replace -t $N with -t <session_name> by looking it up.
                 extra = list(list_extra_args)
+                # Translate $N session IDs → session names
                 for i, arg in enumerate(extra):
                     if (
                         arg == "-t"
                         and i + 1 < len(extra)
                         and str(extra[i + 1]).startswith("$")
                     ):
-                        # Look up session name from id
                         sid = str(extra[i + 1])
-                        try:
-                            import subprocess as _sp
+                        for s in server.sessions:
+                            if s.id == sid:
+                                extra[i + 1] = s.name
+                                break
+                # Split any concatenated flags (e.g., "-tvalue" → "-t", "value")
+                split_extra = []
+                for a in extra:
+                    s = str(a)
+                    if len(s) > 2 and s[:2] in ("-t", "-s", "-F") and s[2:]:
+                        split_extra.extend([s[:2], s[2:]])
+                    else:
+                        split_extra.append(a)
+                tmux_cmds.extend(split_extra)
 
-                            r = _sp.run(
-                                ["tmux", "list-sessions", "-F",
-                                 "#{session_id} #{session_name}"],
-                                capture_output=True, text=True,
-                            )
-                            for line in r.stdout.strip().split("\n"):
-                                parts = line.split(" ", 1)
-                                if len(parts) == 2 and parts[0] == sid:
-                                    extra[i + 1] = parts[1]
-                                    break
-                        except Exception:
-                            pass
-                tmux_cmds.extend(extra)
-            # KEY FIX: use "-F" and format_string as separate args
+            # Pass -F and format string as separate args
             tmux_cmds.extend(["-F", format_string])
 
-            proc = tmux_cmd(*tmux_cmds, tmux_bin=server.tmux_bin)
-
+            proc = _tmux_cmd(*tmux_cmds, tmux_bin=server.tmux_bin)
             if proc.stderr:
-                raise exc.LibTmuxException(proc.stderr)
-
+                raise _exc.LibTmuxException(proc.stderr)
             return [_lenient_parse_output(line) for line in proc.stdout]
 
         _neo.fetch_objs = _patched_fetch_objs
-        # Replace in all modules that import fetch_objs
         for mod in (_server, _session, _window, _pane):
             if hasattr(mod, "fetch_objs"):
                 setattr(mod, "fetch_objs", _patched_fetch_objs)
 
-        # Patch 4: Fix Server.new_session — fallback to list-sessions
-        # when -PF output parsing fails (psmux returns fewer values).
-        _original_new_session = _server.Server.new_session
+        # ------------------------------------------------------------------
+        # Patch 4: Server.new_session — create via subprocess with properly
+        # spaced flags, then fetch the Session object via list-sessions.
+        # ------------------------------------------------------------------
 
         def _patched_new_session(self, *args, **kwargs):
-            """psmux-compatible new_session: create via subprocess, fetch via list."""
-            import subprocess as _sp
-
             session_name = kwargs.get("session_name")
             if session_name is None and args:
                 session_name = args[0]
-            window_name = kwargs.get("window_name")
-            start_directory = kwargs.get("start_directory")
-            x = kwargs.get("x")
-            y = kwargs.get("y")
 
-            # Build command with proper spacing (psmux needs -s <name>, not -s<name>)
-            cmd = ["tmux", "new-session", "-d"]
+            tmux_bin = self.tmux_bin or shutil.which("tmux") or "tmux"
+            cmd = [tmux_bin, "new-session", "-d"]
             if session_name:
                 cmd.extend(["-s", session_name])
-            if window_name:
-                cmd.extend(["-n", window_name])
-            if x is not None:
-                cmd.extend(["-x", str(x)])
-            if y is not None:
-                cmd.extend(["-y", str(y)])
-            if start_directory:
-                cmd.extend(["-c", str(start_directory)])
+            if kwargs.get("window_name"):
+                cmd.extend(["-n", kwargs["window_name"]])
+            if kwargs.get("x") is not None:
+                cmd.extend(["-x", str(kwargs["x"])])
+            if kwargs.get("y") is not None:
+                cmd.extend(["-y", str(kwargs["y"])])
+            if kwargs.get("start_directory"):
+                cmd.extend(["-c", str(kwargs["start_directory"])])
 
-            result = _sp.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 raise RuntimeError(
                     f"tmux new-session failed: {result.stderr.strip()}"
                 )
 
-            # Fetch the created session via list-sessions
             if session_name:
                 for s in self.sessions:
                     if s.name == session_name:

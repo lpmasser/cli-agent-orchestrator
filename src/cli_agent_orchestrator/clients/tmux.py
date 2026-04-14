@@ -3,6 +3,7 @@
 import logging
 import os
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -144,8 +145,6 @@ class TmuxClient:
             # psmux on Windows does not support new-session -e for env vars.
             # Fall back to creating the session without env, then injecting
             # variables via set-environment.
-            import sys
-
             if sys.platform == "win32":
                 session = self.server.new_session(
                     session_name=session_name,
@@ -190,14 +189,12 @@ class TmuxClient:
                 raise ValueError(f"Session '{session_name}' not found")
 
             # psmux on Windows does not support new-window -e for env vars.
-            import sys
-
             if sys.platform == "win32":
                 window = session.new_window(
                     window_name=window_name,
                     start_directory=working_directory,
                 )
-                window.panes[0].cmd("set-environment", "CAO_TERMINAL_ID", terminal_id)
+                session.cmd("set-environment", "CAO_TERMINAL_ID", terminal_id)
             else:
                 window = session.new_window(
                     window_name=window_name,
