@@ -1,18 +1,25 @@
 """Single FastAPI entry point for all HTTP routes."""
 
 import asyncio
-import fcntl
 import json
 import logging
 import os
-import pty
-import signal
 import struct
 import subprocess
-import termios
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Dict, List, Optional
+
+# Unix-only modules for WebSocket terminal streaming (not available on Windows)
+_HAS_PTY = False
+if sys.platform != "win32":
+    import fcntl
+    import pty
+    import signal
+    import termios
+
+    _HAS_PTY = True
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -608,7 +615,17 @@ async def terminal_ws(websocket: WebSocket, terminal_id: str):
     Security: This endpoint provides full PTY access with no authentication.
     It is intended for localhost-only use. Do NOT expose the server to
     untrusted networks (e.g. --host 0.0.0.0) without adding authentication.
+
+    Note: Requires Unix PTY support. On Windows this endpoint is unavailable.
     """
+    if not _HAS_PTY:
+        await websocket.accept()
+        await websocket.close(
+            code=4001,
+            reason="WebSocket terminal not supported on Windows (no PTY)",
+        )
+        return
+
     # Reject connections from non-loopback clients
     client_host = websocket.client.host if websocket.client else None
     if client_host not in (None, "127.0.0.1", "::1", "localhost"):

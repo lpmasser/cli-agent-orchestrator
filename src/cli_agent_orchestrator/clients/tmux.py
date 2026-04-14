@@ -5,6 +5,7 @@ import os
 import subprocess
 import time
 import uuid
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import libtmux
@@ -89,7 +90,7 @@ class TmuxClient:
         # the true branch flows to filesystem ops, the path is cleared.
         # The "/" prefix is always true after realpath(), but this
         # explicit guard satisfies CodeQL and rejects relative paths.
-        if not real_path.startswith("/"):
+        if not Path(real_path).is_absolute():
             raise ValueError(f"Working directory must be an absolute path: {working_directory}")
 
         # Step 3: Block sensitive system directories.
@@ -140,13 +141,28 @@ class TmuxClient:
             }
             environment["CAO_TERMINAL_ID"] = terminal_id
 
-            session = self.server.new_session(
-                session_name=session_name,
-                window_name=window_name,
-                start_directory=working_directory,
-                detach=True,
-                environment=environment,
-            )
+            # psmux on Windows does not support new-session -e for env vars.
+            # Fall back to creating the session without env, then injecting
+            # variables via set-environment.
+            import sys
+
+            if sys.platform == "win32":
+                session = self.server.new_session(
+                    session_name=session_name,
+                    window_name=window_name,
+                    start_directory=working_directory,
+                    detach=True,
+                )
+                for k, v in environment.items():
+                    session.cmd("set-environment", k, v)
+            else:
+                session = self.server.new_session(
+                    session_name=session_name,
+                    window_name=window_name,
+                    start_directory=working_directory,
+                    detach=True,
+                    environment=environment,
+                )
             logger.info(
                 f"Created tmux session: {session_name} with window: {window_name} in directory: {working_directory}"
             )
@@ -173,11 +189,21 @@ class TmuxClient:
             if not session:
                 raise ValueError(f"Session '{session_name}' not found")
 
-            window = session.new_window(
-                window_name=window_name,
-                start_directory=working_directory,
-                environment={"CAO_TERMINAL_ID": terminal_id},
-            )
+            # psmux on Windows does not support new-window -e for env vars.
+            import sys
+
+            if sys.platform == "win32":
+                window = session.new_window(
+                    window_name=window_name,
+                    start_directory=working_directory,
+                )
+                window.panes[0].cmd("set-environment", "CAO_TERMINAL_ID", terminal_id)
+            else:
+                window = session.new_window(
+                    window_name=window_name,
+                    start_directory=working_directory,
+                    environment={"CAO_TERMINAL_ID": terminal_id},
+                )
 
             logger.info(
                 f"Created window '{window.name}' in session '{session_name}' in directory: {working_directory}"
