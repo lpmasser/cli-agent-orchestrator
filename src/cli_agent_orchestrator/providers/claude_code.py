@@ -5,6 +5,7 @@ import logging
 import re
 import shlex
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -34,7 +35,7 @@ RESPONSE_PATTERN = r"⏺(?:\x1b\[[0-9;]*m)*\s+"  # Handle any ANSI codes between
 # - Minimal format: "✻ Orbiting…" (no parenthesized status)
 # Common: spinner char + text + ellipsis, optionally followed by parenthesized status
 PROCESSING_PATTERN = r"[✶✢✽✻✳].*…"
-IDLE_PROMPT_PATTERN = r"[>❯][\s\xa0]"  # Handle both old ">" and new "❯" prompt styles
+IDLE_PROMPT_PATTERN = r"[>❯](?:[\s\xa0]|\x1b|$)"  # ">" or "❯" followed by space, ANSI escape, or EOL
 WAITING_USER_ANSWER_PATTERN = (
     r"↑/↓ to navigate"  # Ink TUI footer shown only while a selection widget is active
 )
@@ -244,13 +245,18 @@ class ClaudeCodeProvider(BaseProvider):
         # Wait for Claude Code prompt to be ready.
         # Accept both IDLE and COMPLETED — some CLI versions show a startup
         # message that get_status() interprets as a completed response.
+        # psmux + Windows: Claude Code startup is slower due to plugin loading
+        # and MCP server initialization. Use a generous timeout.
+        init_timeout = 90.0 if sys.platform == "win32" else 30.0
         if not wait_until_status(
             self,
             {TerminalStatus.IDLE, TerminalStatus.COMPLETED},
-            timeout=30.0,
+            timeout=init_timeout,
             polling_interval=1.0,
         ):
-            raise TimeoutError("Claude Code initialization timed out after 30 seconds")
+            raise TimeoutError(
+                f"Claude Code initialization timed out after {int(init_timeout)} seconds"
+            )
 
         self._initialized = True
         return True

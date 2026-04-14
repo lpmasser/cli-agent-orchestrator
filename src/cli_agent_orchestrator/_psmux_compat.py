@@ -42,6 +42,39 @@ def apply():
         _neo.get_output_format.cache_clear()
         _SEP = _formats.FORMAT_SEPARATOR
 
+        # Patch 1b: Force UTF-8 encoding in tmux_cmd.
+        # Windows defaults to GBK/CP936, corrupting UTF-8 terminal output
+        # (❯ prompt, box-drawing chars) and breaking status detection.
+        import libtmux.common as _common
+
+        _orig_tmux_cmd_init = _tmux_cmd.__init__
+
+        def _utf8_tmux_cmd_init(self, *args, **kwargs):
+            _orig_tmux_cmd_init(self, *args, **kwargs)
+            # Re-run Popen with explicit UTF-8 encoding
+            # The original uses text=True which defaults to locale encoding
+            try:
+                self.process = subprocess.Popen(
+                    self.cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    encoding="utf-8",
+                    errors="backslashreplace",
+                )
+                stdout, stderr = self.process.communicate()
+                self.returncode = self.process.returncode
+                self.stdout = stdout.split("\n")
+                self.stderr = stderr.split("\n") if stderr else []
+                # Remove trailing empty string from split
+                if self.stdout and self.stdout[-1] == "":
+                    self.stdout.pop()
+                if self.stderr and self.stderr[-1] == "":
+                    self.stderr.pop()
+            except Exception:
+                pass  # Fall back to original result
+
+        _tmux_cmd.__init__ = _utf8_tmux_cmd_init
+
         # ------------------------------------------------------------------
         # Patch 2: Lenient parse_output for value count mismatches.
         # ------------------------------------------------------------------
