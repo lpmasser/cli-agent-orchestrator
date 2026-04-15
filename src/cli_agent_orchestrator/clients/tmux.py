@@ -223,6 +223,10 @@ class TmuxClient:
         The -p flag enables bracketed paste mode so multi-line content is treated
         as a single input rather than submitting on each newline.
 
+        On Windows (psmux), paste-buffer's bracketed paste mode corrupts
+        arguments in PowerShell (strips -- prefixes, quotes, short flags).
+        Falls back to plain send-keys which works correctly.
+
         Args:
             session_name: Name of tmux session
             window_name: Name of window in session
@@ -232,9 +236,35 @@ class TmuxClient:
                 requiring 2 Enters to submit.
         """
         target = f"{session_name}:{window_name}"
+        if sys.platform == "win32":
+            return self._send_keys_direct(target, keys, enter_count)
+        else:
+            return self._send_keys_paste(target, keys, enter_count)
+
+    def _send_keys_direct(self, target: str, keys: str, enter_count: int) -> None:
+        """Send keys via tmux send-keys (Windows/psmux)."""
+        try:
+            logger.info(f"send_keys_direct: {target}")
+            subprocess.run(
+                ["tmux", "send-keys", "-t", target, keys, "Enter"],
+                check=True,
+            )
+            for i in range(1, enter_count):
+                time.sleep(0.5)
+                subprocess.run(
+                    ["tmux", "send-keys", "-t", target, "Enter"],
+                    check=True,
+                )
+            logger.debug(f"Sent keys to {target}")
+        except Exception as e:
+            logger.error(f"Failed to send keys to {target}: {e}")
+            raise
+
+    def _send_keys_paste(self, target: str, keys: str, enter_count: int) -> None:
+        """Send keys via tmux paste-buffer (Unix)."""
         buf_name = f"cao_{uuid.uuid4().hex[:8]}"
         try:
-            logger.info(f"send_keys: {target} - keys: {keys}")
+            logger.info(f"send_keys_paste: {target}")
             subprocess.run(
                 ["tmux", "load-buffer", "-b", buf_name, "-"],
                 input=keys.encode(),
