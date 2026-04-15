@@ -120,9 +120,12 @@ class ClaudeCodeProvider(BaseProvider):
             for tool in disallowed:
                 command_parts.extend(["--disallowedTools", tool])
 
-        # Use shlex.join() for proper shell escaping of all arguments
-        # This correctly handles multiline strings, quotes, and special characters
-        claude_cmd = shlex.join(command_parts)
+        # shlex.join uses Unix single-quote escaping which breaks in PowerShell.
+        # subprocess.list2cmdline uses double-quote + backslash (Windows-native).
+        if sys.platform == "win32":
+            claude_cmd = subprocess.list2cmdline(command_parts)
+        else:
+            claude_cmd = shlex.join(command_parts)
 
         # When cao-server runs inside a Claude Code session, CLAUDE* env vars
         # leak into spawned tmux panes (via the tmux server's global env).

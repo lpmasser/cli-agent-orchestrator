@@ -3,6 +3,8 @@
 import logging
 import re
 import shlex
+import subprocess
+import sys
 import time
 from typing import Optional
 
@@ -207,6 +209,10 @@ class CodexProvider(BaseProvider):
             except Exception as e:
                 raise ProviderError(f"Failed to load agent profile '{self._agent_profile}': {e}")
 
+        # shlex.join uses Unix single-quote escaping which breaks in PowerShell.
+        # subprocess.list2cmdline uses double-quote + backslash (Windows-native).
+        if sys.platform == "win32":
+            return subprocess.list2cmdline(command_parts)
         return shlex.join(command_parts)
 
     def _handle_trust_prompt(self, timeout: float = 20.0) -> None:
