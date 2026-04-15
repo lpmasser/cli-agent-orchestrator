@@ -12,7 +12,7 @@ from typing import Optional
 
 from cli_agent_orchestrator.clients.tmux import tmux_client
 from cli_agent_orchestrator.models.terminal import TerminalStatus
-from cli_agent_orchestrator.providers.base import BaseProvider
+from cli_agent_orchestrator.providers.base import BaseProvider, shell_join
 from cli_agent_orchestrator.utils.agent_profiles import load_agent_profile
 from cli_agent_orchestrator.utils.terminal import wait_for_shell, wait_until_status
 
@@ -120,12 +120,7 @@ class ClaudeCodeProvider(BaseProvider):
             for tool in disallowed:
                 command_parts.extend(["--disallowedTools", tool])
 
-        # shlex.join uses Unix single-quote escaping which breaks in PowerShell.
-        # subprocess.list2cmdline uses double-quote + backslash (Windows-native).
-        if sys.platform == "win32":
-            claude_cmd = subprocess.list2cmdline(command_parts)
-        else:
-            claude_cmd = shlex.join(command_parts)
+        claude_cmd = shell_join(command_parts)
 
         # When cao-server runs inside a Claude Code session, CLAUDE* env vars
         # leak into spawned tmux panes (via the tmux server's global env).

@@ -24,7 +24,7 @@ from typing import Optional
 
 from cli_agent_orchestrator.clients.tmux import tmux_client
 from cli_agent_orchestrator.models.terminal import TerminalStatus
-from cli_agent_orchestrator.providers.base import BaseProvider
+from cli_agent_orchestrator.providers.base import BaseProvider, shell_join
 from cli_agent_orchestrator.utils.terminal import wait_for_shell, wait_until_status
 
 logger = logging.getLogger(__name__)
@@ -158,7 +158,7 @@ class KiroCliProvider(BaseProvider):
         # Step 2: Start the Kiro CLI chat session using kiro-cli's default UI.
         # Detection code handles both legacy and TUI patterns (stateless).
         # If initialization fails, fall back to --legacy-ui.
-        command = shlex.join(["kiro-cli", "chat", "--agent", self._agent_profile])
+        command = shell_join(["kiro-cli", "chat", "--agent", self._agent_profile])
         tmux_client.send_keys(self.session_name, self.window_name, command)
 
         # Step 3: Wait for Kiro CLI to fully initialize and show the agent prompt.
@@ -173,7 +173,7 @@ class KiroCliProvider(BaseProvider):
             tmux_client.send_keys(self.session_name, self.window_name, "/exit")
             if not wait_for_shell(tmux_client, self.session_name, self.window_name, timeout=10.0):
                 raise TimeoutError("Shell recovery timed out after --legacy-ui fallback")
-            legacy_command = shlex.join(
+            legacy_command = shell_join(
                 ["kiro-cli", "chat", "--legacy-ui", "--agent", self._agent_profile]
             )
             tmux_client.send_keys(self.session_name, self.window_name, legacy_command)

@@ -18,7 +18,7 @@ from libtmux.exc import LibTmuxException
 
 from cli_agent_orchestrator.clients.tmux import tmux_client
 from cli_agent_orchestrator.models.terminal import TerminalStatus
-from cli_agent_orchestrator.providers.base import BaseProvider
+from cli_agent_orchestrator.providers.base import BaseProvider, shell_join
 from cli_agent_orchestrator.utils.terminal import wait_for_shell
 
 logger = logging.getLogger(__name__)
@@ -160,7 +160,7 @@ class CopilotCliProvider(BaseProvider):
 
         command_parts.append("--autopilot")
 
-        return shlex.join(command_parts)
+        return shell_join(command_parts)
 
     def _build_runtime_mcp_config(self) -> str:
         merged_servers: dict = {}

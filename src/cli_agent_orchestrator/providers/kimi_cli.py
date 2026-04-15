@@ -31,13 +31,14 @@ import os
 import re
 import shlex
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Optional
 
 from cli_agent_orchestrator.clients.tmux import tmux_client
 from cli_agent_orchestrator.models.terminal import TerminalStatus
-from cli_agent_orchestrator.providers.base import BaseProvider
+from cli_agent_orchestrator.providers.base import BaseProvider, shell_join, shell_quote
 from cli_agent_orchestrator.utils.agent_profiles import load_agent_profile
 from cli_agent_orchestrator.utils.terminal import wait_for_shell, wait_until_status
 
@@ -263,8 +264,10 @@ class KimiCliProvider(BaseProvider):
                 raise ProviderError(f"Failed to load agent profile '{self._agent_profile}': {e}")
 
         # cd to unique temp dir (per-directory lock) + set TERM for tmux compatibility
-        kimi_cmd = shlex.join(command_parts)
-        return f"cd {shlex.quote(self._temp_dir)} && TERM=xterm-256color {kimi_cmd}"
+        kimi_cmd = shell_join(command_parts)
+        if sys.platform == "win32":
+            return f"cd {shell_quote(self._temp_dir)}; $env:TERM='xterm-256color'; {kimi_cmd}"
+        return f"cd {shell_quote(self._temp_dir)} && TERM=xterm-256color {kimi_cmd}"
 
     @classmethod
     def _ensure_mcp_timeout(cls) -> None:

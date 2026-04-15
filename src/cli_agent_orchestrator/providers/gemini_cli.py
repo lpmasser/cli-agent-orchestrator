@@ -38,7 +38,7 @@ from typing import Optional
 
 from cli_agent_orchestrator.clients.tmux import tmux_client
 from cli_agent_orchestrator.models.terminal import TerminalStatus
-from cli_agent_orchestrator.providers.base import BaseProvider
+from cli_agent_orchestrator.providers.base import BaseProvider, shell_join
 from cli_agent_orchestrator.utils.agent_profiles import load_agent_profile
 from cli_agent_orchestrator.utils.terminal import wait_for_shell, wait_until_status
 
@@ -279,7 +279,7 @@ class GeminiCliProvider(BaseProvider):
         if self._allowed_tools and "*" not in self._allowed_tools:
             self._write_policy_deny_rules()
 
-        return shlex.join(command_parts)
+        return shell_join(command_parts)
 
     def _write_policy_deny_rules(self) -> None:
         """Write Policy Engine TOML deny rules to ~/.gemini/policies/.

@@ -20,10 +20,34 @@ Each provider must implement pattern matching for its specific CLI's prompt
 and output format to reliably detect status changes.
 """
 
+import shlex
+import subprocess
+import sys
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
 from cli_agent_orchestrator.models.terminal import TerminalStatus
+
+
+def shell_join(command_parts: list[str]) -> str:
+    """Join command parts into a properly escaped shell command string.
+
+    Uses subprocess.list2cmdline on Windows (double-quote escaping for
+    PowerShell) and shlex.join on Unix (single-quote escaping for bash).
+    """
+    if sys.platform == "win32":
+        return subprocess.list2cmdline(command_parts)
+    return shlex.join(command_parts)
+
+
+def shell_quote(s: str) -> str:
+    """Quote a single shell argument.
+
+    Uses subprocess.list2cmdline on Windows and shlex.quote on Unix.
+    """
+    if sys.platform == "win32":
+        return subprocess.list2cmdline([s])
+    return shlex.quote(s)
 
 
 class BaseProvider(ABC):
