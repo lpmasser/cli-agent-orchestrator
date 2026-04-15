@@ -6,6 +6,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional
@@ -60,6 +61,7 @@ class ClaudeCodeProvider(BaseProvider):
         super().__init__(terminal_id, session_name, window_name, allowed_tools, skill_prompt)
         self._initialized = False
         self._agent_profile = agent_profile
+        self._mcp_config_path: Optional[str] = None  # temp file for Windows MCP config
 
     def _build_claude_command(self) -> str:
         """Build Claude Code command with agent profile if provided.
@@ -105,7 +107,19 @@ class ClaudeCodeProvider(BaseProvider):
                             mcp_config[server_name]["env"] = env
 
                     mcp_json = json.dumps({"mcpServers": mcp_config})
-                    command_parts.extend(["--mcp-config", mcp_json])
+                    if sys.platform == "win32":
+                        # On Windows, PowerShell's quoting rules mangle inline
+                        # JSON passed through subprocess.list2cmdline. Write to
+                        # a temp file and pass the file path instead.
+                        mcp_temp = tempfile.NamedTemporaryFile(
+                            mode="w", suffix=".json", delete=False, prefix="cao_mcp_"
+                        )
+                        mcp_temp.write(mcp_json)
+                        mcp_temp.close()
+                        self._mcp_config_path = mcp_temp.name
+                        command_parts.extend(["--mcp-config", mcp_temp.name])
+                    else:
+                        command_parts.extend(["--mcp-config", mcp_json])
 
             except Exception as e:
                 raise ProviderError(f"Failed to load agent profile '{self._agent_profile}': {e}")
@@ -128,12 +142,24 @@ class ClaudeCodeProvider(BaseProvider):
         # Unset all matching vars except CLAUDE_CODE_USE_* and
         # CLAUDE_CODE_SKIP_*_AUTH (needed for provider authentication:
         # Bedrock, Vertex AI, Foundry).
-        unset_cmd = (
-            "unset $(env | sed -n 's/^\\(CLAUDE[A-Z_]*\\)=.*/\\1/p'"
-            " | grep -v -E 'CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY)"
-            "|CLAUDE_CODE_SKIP_(BEDROCK|VERTEX|FOUNDRY)_AUTH'"
-            ") 2>/dev/null"
-        )
+        if sys.platform == "win32":
+            # On Windows (psmux + PowerShell), bash utilities (unset, sed,
+            # grep) are unavailable. Use a PowerShell one-liner instead.
+            # Single-quoted regex avoids escaping issues in send_keys.
+            unset_cmd = (
+                "Get-ChildItem env:CLAUDE* -ErrorAction SilentlyContinue"
+                " | Where-Object { $_.Name -notmatch"
+                " 'CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY)"
+                "|CLAUDE_CODE_SKIP_(BEDROCK|VERTEX|FOUNDRY)_AUTH' }"
+                " | ForEach-Object { Remove-Item \"env:$($_.Name)\" }"
+            )
+        else:
+            unset_cmd = (
+                "unset $(env | sed -n 's/^\\(CLAUDE[A-Z_]*\\)=.*/\\1/p'"
+                " | grep -v -E 'CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY)"
+                "|CLAUDE_CODE_SKIP_(BEDROCK|VERTEX|FOUNDRY)_AUTH'"
+                ") 2>/dev/null"
+            )
         return f"{unset_cmd}; {claude_cmd}"
 
     @staticmethod
@@ -339,4 +365,10 @@ class ClaudeCodeProvider(BaseProvider):
 
     def cleanup(self) -> None:
         """Clean up Claude Code provider."""
+        if self._mcp_config_path:
+            try:
+                Path(self._mcp_config_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._mcp_config_path = None
         self._initialized = False

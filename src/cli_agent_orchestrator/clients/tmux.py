@@ -529,7 +529,12 @@ class TmuxClient:
 
             pane = window.active_pane
             if pane:
-                pane.cmd("pipe-pane", "-o", f"cat >> {file_path}")
+                if sys.platform == "win32":
+                    # psmux + Windows: 'cat' is unavailable. Use cmd.exe's
+                    # built-in 'more' to read stdin and append to log file.
+                    pane.cmd("pipe-pane", "-o", f'cmd /c more >> "{file_path}"')
+                else:
+                    pane.cmd("pipe-pane", "-o", f'cat >> "{file_path}"')
                 logger.info(f"Started pipe-pane for {session_name}:{window_name} to {file_path}")
         except Exception as e:
             logger.error(f"Failed to start pipe-pane for {session_name}:{window_name}: {e}")

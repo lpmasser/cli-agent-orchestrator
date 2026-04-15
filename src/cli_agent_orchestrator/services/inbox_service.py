@@ -23,7 +23,7 @@ Performance Optimization:
 
 import logging
 import re
-import subprocess
+from collections import deque
 from pathlib import Path
 
 from watchdog.events import FileModifiedEvent, FileSystemEventHandler
@@ -43,14 +43,15 @@ def _get_log_tail(terminal_id: str, lines: int = 100) -> str:
 
     Default of 100 lines covers full-screen TUI providers where the idle
     prompt sits mid-screen with 30+ padding lines below it.
-    Reading 100 lines via tail is still sub-millisecond.
+    Uses pure-Python file reading for cross-platform compatibility
+    (the previous ``tail`` subprocess call failed on Windows).
+    ``deque(maxlen=lines)`` keeps only the last N lines in memory,
+    avoiding large allocations for long-running terminal logs.
     """
     log_path = TERMINAL_LOG_DIR / f"{terminal_id}.log"
     try:
-        result = subprocess.run(
-            ["tail", "-n", str(lines), str(log_path)], capture_output=True, text=True, timeout=1
-        )
-        return result.stdout
+        with open(log_path, "r", errors="replace") as f:
+            return "".join(deque(f, maxlen=lines))
     except Exception:
         return ""
 
