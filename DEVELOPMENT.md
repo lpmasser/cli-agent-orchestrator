@@ -8,6 +8,7 @@ This guide covers setting up your development environment and running tests for 
 - [uv](https://docs.astral.sh/uv/) - Fast Python package installer and resolver
 - Git
 - tmux 3.2+ (for running the orchestrator and integration tests)
+- **Windows only**: [psmux](https://github.com/psmux/psmux) **3.3.4 or higher** as the tmux replacement. Install via `cargo install psmux` (requires Rust toolchain) or download a pre-built release from the [psmux releases page](https://github.com/psmux/psmux/releases). Older versions need the compatibility shim in `cli_agent_orchestrator._psmux_compat` to be re-enabled manually — see that module's docstring
 
 ## Getting Started
 

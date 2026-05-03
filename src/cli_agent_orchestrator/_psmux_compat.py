@@ -1,12 +1,22 @@
 """Compatibility shim for running CAO with psmux on Windows.
 
-psmux is a Windows-native tmux replacement with these known differences
-from real tmux that break libtmux:
+Status: dormant since 2026-04-28 — verified unnecessary on psmux v3.3.4+
+and removed from auto-import in ``__init__.py``. The patches below remain
+intact as a fallback for older psmux versions or future regressions.
 
-1. Only handles U+001E as format separator (not U+241E).
-2. Does not support concatenated flags (``-Fvalue``); requires ``-F value``.
-3. Does not support ``$N`` session IDs in ``-t`` arguments.
-4. ``new-session -PF`` may return fewer format values than expected.
+Historically psmux had these differences from real tmux that broke libtmux:
+
+1. Only handled U+001E as format separator (not U+241E).
+2. Did not support concatenated flags (``-Fvalue``); required ``-F value``.
+3. Did not support ``$N`` session IDs in ``-t`` arguments.
+4. ``new-session -PF`` could return fewer format values than expected.
+
+All four are addressed natively in psmux v3.3.4+. To re-enable the shim
+for an older psmux version, import and invoke ``apply()`` before any
+libtmux call::
+
+    from cli_agent_orchestrator._psmux_compat import apply
+    apply()
 
 All patches are guarded by ``sys.platform == "win32"`` and have no effect
 on Linux/macOS.
@@ -19,7 +29,13 @@ import sys
 
 
 def apply():
-    """Apply psmux compatibility patches. No-op on non-Windows."""
+    """Apply psmux compatibility patches. No-op on non-Windows.
+
+    Verified unnecessary on psmux v3.3.4+ (2026-04-28), which natively
+    handles libtmux's default U+241E separator, ``-Fvalue`` concatenated
+    flags, ``$N`` session ID lookups, and ``new-session -PF`` field counts.
+    Retained for fallback if regression appears or for older psmux versions.
+    """
     if sys.platform != "win32":
         return
 

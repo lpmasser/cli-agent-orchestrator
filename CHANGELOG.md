@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **psmux compatibility shim disabled by default (Windows)** — Verified all 4 monkey-patches in `_psmux_compat.py` are no longer needed on psmux v3.3.4+ (released 2026-04-28), which natively handles libtmux's default U+241E format separator, `-Fvalue` concatenated flags, `$N` session ID lookups, and `new-session -PF` field counts. The shim is no longer auto-applied at import time and is retained only as a fallback. **Windows users must use psmux ≥ 3.3.4** (`cargo install psmux`)
 - **Launch prompt clarity + `--auto-approve`** — Redesign the `cao launch` confirmation prompt to show `Role` instead of `Blocked`, clearly distinguish `[Y]` / `[--auto-approve]` / `[--yolo]`, and add `--auto-approve` flag to skip the prompt without removing restrictions (for automated flows, scripts, and agent-to-agent launches)
 
 ### Fixed
