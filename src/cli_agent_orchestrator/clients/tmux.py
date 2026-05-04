@@ -1,9 +1,11 @@
 """Simplified tmux client as module singleton."""
 
+import hashlib
 import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -16,11 +18,102 @@ from cli_agent_orchestrator.constants import TMUX_HISTORY_LINES
 logger = logging.getLogger(__name__)
 
 
+class _CapturePanePoller:
+    """Background poller mirroring pane content to a log file.
+
+    Workaround for psmux v3.3.4 pipe-pane stdin not being forwarded on
+    Windows (psmux/psmux#95 + Windows ConPTY constraints): we cannot
+    pipe pane stdout to a sink command's stdin, so instead we
+    periodically run ``capture-pane -e -p -S -<n>`` and rewrite the log
+    file when the snapshot's hash changes. The existing inbox
+    PollingObserver + LogFileHandler chain picks up the file
+    modification and triggers idle detection / message delivery as
+    before.
+    """
+
+    def __init__(
+        self,
+        client: "TmuxClient",
+        session_name: str,
+        window_name: str,
+        log_path: str,
+        interval: float = 3.0,
+        history_lines: int = 200,
+    ) -> None:
+        self._client = client
+        self._session_name = session_name
+        self._window_name = window_name
+        self._log_path = Path(log_path)
+        self._interval = interval
+        self._history_lines = history_lines
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._last_hash: Optional[bytes] = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"cap-poll-{self._window_name}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        t = self._thread
+        if t is not None:
+            t.join(timeout=2.0)
+            if t.is_alive():
+                logger.warning(
+                    f"capture poller for {self._session_name}:{self._window_name} "
+                    f"did not exit within 2s; abandoning thread"
+                )
+        self._thread = None
+
+    def _run(self) -> None:
+        # Tag the temp file with thread id so two pollers writing the
+        # same log_path (e.g., during a slow stop/start cycle) cannot
+        # collide on rename.
+        tmp_suffix = f".{os.getpid()}.{threading.get_ident()}.tmp"
+        while not self._stop.is_set():
+            try:
+                content = self._client.get_history(
+                    self._session_name,
+                    self._window_name,
+                    tail_lines=self._history_lines,
+                )
+                new_hash = hashlib.sha256(
+                    content.encode("utf-8", errors="replace")
+                ).digest()
+                if new_hash != self._last_hash:
+                    tmp_path = self._log_path.with_suffix(self._log_path.suffix + tmp_suffix)
+                    tmp_path.write_text(content, encoding="utf-8", errors="replace")
+                    tmp_path.replace(self._log_path)
+                    self._last_hash = new_hash
+            except Exception as e:
+                # First failure surfaces as a warning so a misconfigured
+                # capture-pane / dead pane is visible; subsequent failures
+                # drop to debug to avoid log spam.
+                level = logging.WARNING if self._last_hash is None else logging.DEBUG
+                logger.log(
+                    level,
+                    f"capture poll error for {self._session_name}:{self._window_name}: {e}",
+                )
+            self._stop.wait(self._interval)
+
+
 class TmuxClient:
     """Simplified tmux client for basic operations."""
 
     def __init__(self) -> None:
         self.server = libtmux.Server()
+        # Per-window capture-pane pollers used as a Windows fallback for
+        # pipe-pane (see _CapturePanePoller). Keyed by "session:window".
+        self._capture_pollers: Dict[str, _CapturePanePoller] = {}
+        self._capture_pollers_lock = threading.Lock()
 
     # Directories that should never be used as working directories.
     # Prevents user-supplied paths from pointing at sensitive system locations.
@@ -552,15 +645,12 @@ class TmuxClient:
             pane = window.active_pane
             if pane:
                 if sys.platform == "win32":
-                    # KNOWN ISSUE: psmux v3.3.4 pipe-pane does not forward
-                    # pane stdout to the spawned command's stdin on Windows
-                    # (psmux/psmux#95). The log file remains empty regardless
-                    # of the sink command, which breaks inbox auto-delivery
-                    # (LogFileHandler watchdog never fires). 'cat' is also
-                    # unavailable; we fall back to 'cmd /c more' so the
-                    # pipe-pane call itself succeeds. Replacing this with a
-                    # capture-pane poller is tracked as a follow-up.
-                    pane.cmd("pipe-pane", "-o", f'cmd /c more >> "{file_path}"')
+                    # psmux v3.3.4 pipe-pane does not forward pane stdout to
+                    # the sink command's stdin on Windows (psmux/psmux#95 +
+                    # Windows ConPTY constraints), so the sink approach used
+                    # on POSIX cannot be made to work here. Mirror the pane
+                    # to the log file via a capture-pane poller instead.
+                    self._start_capture_poller(session_name, window_name, file_path)
                 else:
                     pane.cmd("pipe-pane", "-o", f'cat >> "{file_path}"')
                 logger.info(f"Started pipe-pane for {session_name}:{window_name} to {file_path}")
@@ -575,6 +665,12 @@ class TmuxClient:
             session_name: Tmux session name
             window_name: Tmux window name
         """
+        if sys.platform == "win32":
+            # We started a capture-pane poller in pipe_pane() instead of an
+            # actual ``tmux pipe-pane`` invocation, so just stop the thread.
+            self._stop_capture_poller(session_name, window_name)
+            logger.info(f"Stopped capture poller for {session_name}:{window_name}")
+            return
         try:
             session = self.server.sessions.get(session_name=session_name)
             if not session:
@@ -591,6 +687,30 @@ class TmuxClient:
         except Exception as e:
             logger.error(f"Failed to stop pipe-pane for {session_name}:{window_name}: {e}")
             raise
+
+    def _start_capture_poller(
+        self, session_name: str, window_name: str, log_path: str
+    ) -> None:
+        """Start a capture-pane poller mirroring pane content to ``log_path``."""
+        key = f"{session_name}:{window_name}"
+        # Build the new poller and swap it in under the lock; join the
+        # old poller outside the lock so concurrent calls for unrelated
+        # sessions are not blocked by the up-to-2s join in stop().
+        poller = _CapturePanePoller(self, session_name, window_name, log_path)
+        with self._capture_pollers_lock:
+            existing = self._capture_pollers.pop(key, None)
+            self._capture_pollers[key] = poller
+        if existing is not None:
+            existing.stop()
+        poller.start()
+
+    def _stop_capture_poller(self, session_name: str, window_name: str) -> None:
+        """Stop the capture-pane poller for ``session_name:window_name`` if running."""
+        key = f"{session_name}:{window_name}"
+        with self._capture_pollers_lock:
+            poller = self._capture_pollers.pop(key, None)
+        if poller is not None:
+            poller.stop()
 
 
 # Module-level singleton

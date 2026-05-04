@@ -10,9 +10,9 @@ This guide covers setting up your development environment and running tests for 
 - tmux 3.2+ (for running the orchestrator and integration tests)
 - **Windows only**: [psmux](https://github.com/psmux/psmux) **3.3.4 or higher** as the tmux replacement. Install via `cargo install psmux` (requires Rust toolchain) or download a pre-built release from the [psmux releases page](https://github.com/psmux/psmux/releases). Older versions need the compatibility shim in `cli_agent_orchestrator._psmux_compat` to be re-enabled manually — see that module's docstring
 
-### Known Windows limitations
+### Windows-specific implementation notes
 
-- **Inbox auto-delivery (watchdog → log file) does not fire on Windows.** psmux v3.3.4 `pipe-pane` does not forward pane stdout to the spawned sink command's stdin (see [psmux/psmux#95](https://github.com/psmux/psmux/issues/95)), so the per-terminal log file in `~/.aws/cli-agent-orchestrator/logs/terminal/` stays empty and `LogFileHandler` in `services/inbox_service.py` never observes a modify event. Manual `send_input` + `capture-pane` based reads are unaffected. A capture-pane poller fallback is tracked as a follow-up.
+- **`pipe-pane` is replaced by a capture-pane poller on Windows.** psmux v3.3.4 `pipe-pane` does not forward pane stdout to the spawned sink command's stdin (see [psmux/psmux#95](https://github.com/psmux/psmux/issues/95)), so a sink-based approach cannot mirror the pane to a log file. `clients/tmux.py` instead spawns a daemon thread per terminal that runs `capture-pane -e -p -S -<n>` every ~3 seconds and rewrites the log file when the snapshot's hash changes. The inbox `PollingObserver` + `LogFileHandler` chain is unchanged, so idle-detection and message delivery work the same on Windows as on POSIX, just with up to ~3 s of extra latency.
 
 ## Getting Started
 
