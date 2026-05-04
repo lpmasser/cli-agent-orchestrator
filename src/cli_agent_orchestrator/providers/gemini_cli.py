@@ -243,7 +243,7 @@ class GeminiCliProvider(BaseProvider):
                         if os.path.exists(gemini_md_path):
                             os.rename(gemini_md_path, backup_path)
                             self._gemini_md_backup_path = backup_path
-                        with open(gemini_md_path, "w") as f:
+                        with open(gemini_md_path, "w", encoding="utf-8") as f:
                             f.write(system_prompt)
                         self._gemini_md_path = gemini_md_path
 
@@ -350,7 +350,7 @@ class GeminiCliProvider(BaseProvider):
 
         # Read existing settings (or start fresh)
         if settings_path.exists():
-            with open(settings_path) as f:
+            with open(settings_path, encoding="utf-8") as f:
                 settings = json.load(f)
         else:
             settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -378,7 +378,7 @@ class GeminiCliProvider(BaseProvider):
             settings["mcpServers"][server_name] = entry
             self._mcp_server_names.append(server_name)
 
-        with open(settings_path, "w") as f:
+        with open(settings_path, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=2)
 
     def _unregister_mcp_servers(self) -> None:
@@ -397,14 +397,14 @@ class GeminiCliProvider(BaseProvider):
             return
 
         try:
-            with open(settings_path) as f:
+            with open(settings_path, encoding="utf-8") as f:
                 settings = json.load(f)
 
             mcp_servers = settings.get("mcpServers", {})
             for server_name in self._mcp_server_names:
                 mcp_servers.pop(server_name, None)
 
-            with open(settings_path, "w") as f:
+            with open(settings_path, "w", encoding="utf-8") as f:
                 json.dump(settings, f, indent=2)
         except Exception as e:
             logger.warning(f"Failed to unregister MCP servers from settings.json: {e}")

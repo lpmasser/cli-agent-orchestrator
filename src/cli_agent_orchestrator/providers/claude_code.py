@@ -176,7 +176,7 @@ class ClaudeCodeProvider(BaseProvider):
         settings: dict = {}
         if settings_path.exists():
             try:
-                with open(settings_path) as f:
+                with open(settings_path, encoding="utf-8") as f:
                     settings = json.load(f)
             except (json.JSONDecodeError, OSError):
                 pass
@@ -186,7 +186,7 @@ class ClaudeCodeProvider(BaseProvider):
 
         settings["skipDangerousModePermissionPrompt"] = True
         settings_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(settings_path, "w") as f:
+        with open(settings_path, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=2)
         logger.info("Set skipDangerousModePermissionPrompt in ~/.claude/settings.json")
 

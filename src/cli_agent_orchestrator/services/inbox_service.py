@@ -50,7 +50,7 @@ def _get_log_tail(terminal_id: str, lines: int = 100) -> str:
     """
     log_path = TERMINAL_LOG_DIR / f"{terminal_id}.log"
     try:
-        with open(log_path, "r", errors="replace") as f:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
             return "".join(deque(f, maxlen=lines))
     except Exception:
         return ""

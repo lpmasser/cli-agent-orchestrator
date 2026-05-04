@@ -10,6 +10,10 @@ This guide covers setting up your development environment and running tests for 
 - tmux 3.2+ (for running the orchestrator and integration tests)
 - **Windows only**: [psmux](https://github.com/psmux/psmux) **3.3.4 or higher** as the tmux replacement. Install via `cargo install psmux` (requires Rust toolchain) or download a pre-built release from the [psmux releases page](https://github.com/psmux/psmux/releases). Older versions need the compatibility shim in `cli_agent_orchestrator._psmux_compat` to be re-enabled manually — see that module's docstring
 
+### Known Windows limitations
+
+- **Inbox auto-delivery (watchdog → log file) does not fire on Windows.** psmux v3.3.4 `pipe-pane` does not forward pane stdout to the spawned sink command's stdin (see [psmux/psmux#95](https://github.com/psmux/psmux/issues/95)), so the per-terminal log file in `~/.aws/cli-agent-orchestrator/logs/terminal/` stays empty and `LogFileHandler` in `services/inbox_service.py` never observes a modify event. Manual `send_input` + `capture-pane` based reads are unaffected. A capture-pane poller fallback is tracked as a follow-up.
+
 ## Getting Started
 
 ### 1. Clone the Repository

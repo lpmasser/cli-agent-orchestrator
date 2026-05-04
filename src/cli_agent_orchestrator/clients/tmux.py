@@ -24,29 +24,44 @@ class TmuxClient:
 
     # Directories that should never be used as working directories.
     # Prevents user-supplied paths from pointing at sensitive system locations.
-    # Includes /private/* variants for macOS (where /etc -> /private/etc, etc.).
-    _BLOCKED_DIRECTORIES = frozenset(
-        {
-            "/",
-            "/bin",
-            "/sbin",
-            "/usr/bin",
-            "/usr/sbin",
-            "/etc",
-            "/var",
-            "/tmp",
-            "/dev",
-            "/proc",
-            "/sys",
-            "/root",
-            "/boot",
-            "/lib",
-            "/lib64",
-            "/private/etc",
-            "/private/var",
-            "/private/tmp",
-        }
-    )
+    # Windows entries are stored lowercased; the candidate path is also
+    # lowercased before lookup since NTFS is case-insensitive.
+    if sys.platform == "win32":
+        _BLOCKED_DIRECTORIES = frozenset(
+            {
+                "c:\\",
+                "c:\\windows",
+                "c:\\windows\\system32",
+                "c:\\windows\\syswow64",
+                "c:\\program files",
+                "c:\\program files (x86)",
+                "c:\\programdata",
+            }
+        )
+    else:
+        # Includes /private/* variants for macOS (where /etc -> /private/etc, etc.).
+        _BLOCKED_DIRECTORIES = frozenset(
+            {
+                "/",
+                "/bin",
+                "/sbin",
+                "/usr/bin",
+                "/usr/sbin",
+                "/etc",
+                "/var",
+                "/tmp",
+                "/dev",
+                "/proc",
+                "/sys",
+                "/root",
+                "/boot",
+                "/lib",
+                "/lib64",
+                "/private/etc",
+                "/private/var",
+                "/private/tmp",
+            }
+        )
 
     def _resolve_and_validate_working_directory(self, working_directory: Optional[str]) -> str:
         """Resolve and validate working directory.
@@ -62,9 +77,12 @@ class TmuxClient:
 
         **Blocked (unsafe) directories:**
 
-        - System directories: ``/``, ``/bin``, ``/sbin``, ``/usr/bin``,
+        - Unix system roots: ``/``, ``/bin``, ``/sbin``, ``/usr/bin``,
           ``/usr/sbin``, ``/etc``, ``/var``, ``/tmp``, ``/dev``, ``/proc``,
           ``/sys``, ``/root``, ``/boot``, ``/lib``, ``/lib64``
+        - Windows system roots (case-insensitive): ``C:\\``, ``C:\\Windows``,
+          ``C:\\Windows\\System32``, ``C:\\Windows\\SysWOW64``,
+          ``C:\\Program Files``, ``C:\\Program Files (x86)``, ``C:\\ProgramData``
 
         Args:
             working_directory: Optional directory path, defaults to current directory
@@ -99,7 +117,11 @@ class TmuxClient:
         # This prevents launching agents in /etc, /var, /root, etc., while
         # still allowing legitimate paths like /Volumes/workplace or even
         # /var/folders (macOS temp) that happen to be under a blocked prefix.
-        if real_path in self._BLOCKED_DIRECTORIES:
+        # os.path.normcase lowercases on Windows (NTFS is case-insensitive)
+        # and is a no-op on POSIX, matching the platform-specific casing of
+        # entries in _BLOCKED_DIRECTORIES.
+        check_path = os.path.normcase(real_path)
+        if check_path in self._BLOCKED_DIRECTORIES:
             raise ValueError(
                 f"Working directory not allowed: {working_directory} "
                 f"(resolves to blocked system path {real_path})"
@@ -530,8 +552,14 @@ class TmuxClient:
             pane = window.active_pane
             if pane:
                 if sys.platform == "win32":
-                    # psmux + Windows: 'cat' is unavailable. Use cmd.exe's
-                    # built-in 'more' to read stdin and append to log file.
+                    # KNOWN ISSUE: psmux v3.3.4 pipe-pane does not forward
+                    # pane stdout to the spawned command's stdin on Windows
+                    # (psmux/psmux#95). The log file remains empty regardless
+                    # of the sink command, which breaks inbox auto-delivery
+                    # (LogFileHandler watchdog never fires). 'cat' is also
+                    # unavailable; we fall back to 'cmd /c more' so the
+                    # pipe-pane call itself succeeds. Replacing this with a
+                    # capture-pane poller is tracked as a follow-up.
                     pane.cmd("pipe-pane", "-o", f'cmd /c more >> "{file_path}"')
                 else:
                     pane.cmd("pipe-pane", "-o", f'cat >> "{file_path}"')
